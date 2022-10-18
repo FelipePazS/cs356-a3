@@ -12,18 +12,61 @@ import net.floodlightcontroller.packet.IPv4;
 import net.floodlightcontroller.packet.ARP;
 import java.nio.ByteBuffer;
 import java.util.*;
+import java.util.concurrent.*;
+import java.util.TimerTask;
+
+class MyTimerTask extends TimerTask {
+
+	Ethernet ARP_request;
+	Iface outFace;
+	public int TTL;
+	Router router;
+	Timer timer;
+	int ip;
+	ConcurrentHashMap map;
+
+	public MyTimerTask(Ethernet request, Iface outIface, Router _router, ConcurrentHashMap map, Timer _timer){
+		this.ARP_request = request;
+		this.outFace = outIface;
+		this.TTL = 2;
+		this.timer = _timer;
+		this.router = _router;
+		this.map = map;
+	}
+
+    @Override
+    public void run() {
+        if (this.TTL > 0){
+			this.TTL -= 1;
+			this.router.sendPacket(ARP_request, outFace);
+			if (this.TTL == 0 || this.TTL < 0){
+				timer.cancel();
+			}
+		}
+		else {
+			if(map.containsKey(ip)){
+				map.remove(ip);
+			}
+			timer.cancel();
+		}
+    }
+
+}
 
 class Queue_ARP{
 	public Queue<Ethernet> q;
-	public int TTL;
-	Ethernet ARP_request;
 	long time_sent;
 	Iface outFace;
+	Timer timer;
 
-	public Queue_ARP(Ethernet request){
+	public Queue_ARP(Iface outIface, Timer timer){
 		this.q = new LinkedList<Ethernet>();
-		this.TTL = 3;
-		this.ARP_request = request;
+		this.outFace = outIface;
+		this.timer = timer;
+	}
+
+	public void done(){
+		timer.cancel();
 	}
 }
 
@@ -36,7 +79,7 @@ public class Router extends Device
 	private RouteTable routeTable;
 	
 	/** ARP cache for the router */
-	private Map<Integer,Queue_ARP> ip_queue_map;
+	private ConcurrentHashMap<Integer,Queue_ARP> ip_queue_map;
 	private ArpCache arpCache;
 
 	private static final int ICMP_TIME_EXCEEDED_TYPE = 11;
@@ -61,7 +104,7 @@ public class Router extends Device
 		super(host,logfile);
 		this.routeTable = new RouteTable();
 		this.arpCache = new ArpCache();
-		this.ip_queue_map = new HashMap<Integer,Queue_ARP>();
+		this.ip_queue_map = new ConcurrentHashMap<Integer,Queue_ARP>();
 	}
 	
 	/**
@@ -119,27 +162,6 @@ public class Router extends Device
                 etherPacket.toString().replace("\n", "\n\t"));
 		
 		/********************************************************************/
-		// handle Queue packets with time to send THIS IS WRONG
-		if (!ip_queue_map.isEmpty()){
-			Iterator<Map.Entry<Integer, Queue_ARP>> it = ip_queue_map.entrySet().iterator();
-			while (it.hasNext()){
-				Map.Entry<Integer, Queue_ARP> entry = it.next();
-				Queue_ARP queue = entry.getValue();
-				long current_time = System.currentTimeMillis();
-				if (((current_time - queue.time_sent) / 1000) > (long) 1){
-					if ((((current_time - queue.time_sent) / 1000) >= (long) 2 )|| queue.TTL == 0){
-						for (Ethernet item: queue.q){
-							this.handleICMP(item, queue.outFace, ICMP_DEST_HOST_UNREACH_TYPE, ICMP_DEST_HOST_UNREACH_CODE);
-						}
-						it.remove();
-					}
-					else {
-						queue.TTL = queue.TTL - 1;
-						this.sendPacket(queue.ARP_request, queue.outFace);
-					}
-				}
-			}
-		}
 		
 		switch(etherPacket.getEtherType())
 		{
@@ -192,10 +214,12 @@ public class Router extends Device
 			// Dequeue and send all packets waiting for the MAC
 			if (ip_queue_map.containsKey(sender_IP)){
 				Queue_ARP queue = ip_queue_map.get(sender_IP);
+				queue.done();
 				for (Ethernet packet : queue.q){
 					packet.setDestinationMACAddress(sender_MAC);
 					this.sendPacket(packet, queue.outFace);
 				}
+				ip_queue_map.remove(sender_IP);
 			}
 			break;
 		}
@@ -295,11 +319,7 @@ public class Router extends Device
 			if (this.ip_queue_map.containsKey(nextHop)){
 				Queue_ARP queue = ip_queue_map.get(nextHop);
 				queue.q.add(etherPacket);
-				if (((queue.time_sent - System.currentTimeMillis()) / 1000) >= (long) 1 && queue.TTL != 0){
-					queue.TTL -= 1;
-					eth_request = queue.ARP_request;
-					queue.time_sent = System.currentTimeMillis();
-				}
+				return;
 			}
 			else{
 				// Generate ARP Request
@@ -321,13 +341,13 @@ public class Router extends Device
 				eth_request.setPayload(arp_request);
 
 				// Create Queue struct
-				Queue_ARP queue = new Queue_ARP(eth_request);
+				Timer timer = new Timer(true);
+				MyTimerTask task = new MyTimerTask(eth_request, outIface, this,ip_queue_map, timer);
+				Queue_ARP queue = new Queue_ARP(outIface, timer);
 				queue.q.add(etherPacket);
-				queue.TTL = queue.TTL - 1;
-				queue.time_sent = System.currentTimeMillis();
-				queue.outFace = outIface;
-
 				ip_queue_map.put(nextHop, queue);
+
+				timer.schedule(task, 1000, 1000);
 			}
 
 			this.sendPacket(eth_request, outIface);
