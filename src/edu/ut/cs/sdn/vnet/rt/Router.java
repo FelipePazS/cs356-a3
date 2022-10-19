@@ -4,12 +4,8 @@ import edu.ut.cs.sdn.vnet.Device;
 import edu.ut.cs.sdn.vnet.DumpFile;
 import edu.ut.cs.sdn.vnet.Iface;
 
-import net.floodlightcontroller.packet.Data;
-import net.floodlightcontroller.packet.Ethernet;
-import net.floodlightcontroller.packet.ICMP;
-import net.floodlightcontroller.packet.MACAddress;
-import net.floodlightcontroller.packet.IPv4;
-import net.floodlightcontroller.packet.ARP;
+import net.floodlightcontroller.packet.*;
+
 import java.nio.ByteBuffer;
 import java.util.*;
 import java.util.concurrent.*;
@@ -91,6 +87,8 @@ public class Router extends Device
 	private static final int ICMP_DEST_PORT_UNREACH_TYPE = 3;
 	private static final int ICMP_DEST_PORT_UNREACH_CODE = 3;
 	private static final int ICMP_ECHO_REQ = 8;
+
+	private static final int RIP_ADDR = IPv4.toIPv4Address("224.0.0.9");
 
 
 
@@ -234,6 +232,14 @@ public class Router extends Device
 		// Get IP header
 		IPv4 ipPacket = (IPv4)etherPacket.getPayload();
         System.out.println("Handle IP packet");
+
+        if (ipPacket.getDestinationAddress() == RIP_ADDR && ipPacket.getProtocol() == IPv4.PROTOCOL_UDP) {
+        	UDP udp = (UDP) ipPacket.getPayload();
+        	if (udp.getDestinationPort() == UDP.RIP_PORT) {
+
+			}
+
+		}
 
         // Verify checksum
         short origCksum = ipPacket.getChecksum();
@@ -427,6 +433,25 @@ public class Router extends Device
 		ip.setPayload(icmp);
 		icmp.setPayload(data);
 		this.sendPacket(ether, ogIface);
+	}
+
+	private void handleRIP() {
+
+		Ethernet ether = new Ethernet();
+		ether.setEtherType(Ethernet.TYPE_IPv4);
+
+		IPv4 ip = new IPv4();
+		final byte ICMP_STANDARD_TTL = 64;
+		ip.setTtl(ICMP_STANDARD_TTL);
+		ip.setProtocol(IPv4.PROTOCOL_UDP);
+
+		UDP udp = new UDP();
+		udp.setSourcePort(UDP.RIP_PORT);
+		udp.setDestinationPort(UDP.RIP_PORT);
+		
+		Data data = new Data();
+		RIPv2 rip = new RIPv2();
+
 	}
 
 
