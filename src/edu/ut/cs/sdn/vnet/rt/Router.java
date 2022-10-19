@@ -89,6 +89,8 @@ public class Router extends Device
 	private static final int ICMP_ECHO_REQ = 8;
 
 	private static final int RIP_ADDR = IPv4.toIPv4Address("224.0.0.9");
+	private static final String BROADCAST_MAC_ADDR = "FF:FF:FF:FF:FF:FF";
+
 
 
 
@@ -435,22 +437,27 @@ public class Router extends Device
 		this.sendPacket(ether, ogIface);
 	}
 
-	private void handleRIP() {
+	private void handleRIP(Iface ogIface, int ripCommand) {
 
 		Ethernet ether = new Ethernet();
 		ether.setEtherType(Ethernet.TYPE_IPv4);
+		ether.setSourceMACAddress(ogIface.getMacAddress().toBytes());
+		ether.setDestinationMACAddress(BROADCAST_MAC_ADDR);
 
 		IPv4 ip = new IPv4();
 		final byte ICMP_STANDARD_TTL = 64;
 		ip.setTtl(ICMP_STANDARD_TTL);
 		ip.setProtocol(IPv4.PROTOCOL_UDP);
+		ip.setSourceAddress(ogIface.getIpAddress());
 
 		UDP udp = new UDP();
 		udp.setSourcePort(UDP.RIP_PORT);
 		udp.setDestinationPort(UDP.RIP_PORT);
-		
+
 		Data data = new Data();
+		
 		RIPv2 rip = new RIPv2();
+		rip.setCommand((byte) ripCommand);
 
 	}
 
