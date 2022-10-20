@@ -113,7 +113,7 @@ public class Router extends Device
 {	
 	/** Routing table for the router */
 	private RouteTable routeTable;
-	private Map<int, ripEntry> ripTable;
+	private Map<Integer, RIPv2Entry> ripTable;
 	Timer timer;
 	
 	/** ARP cache for the router */
@@ -141,21 +141,27 @@ public class Router extends Device
 	 * Creates a router for a specific host.
 	 * @param host hostname for the router
 	 */
-	public Router(String host, DumpFile logfile, bool hasTable)
+	public Router(String host, DumpFile logfile, boolean hasTable)
 	{
 		super(host,logfile);
 		this.routeTable = new RouteTable();
 		this.arpCache = new ArpCache();
-		this.ripTable = new HashMap<int, ripEntry>();
+		this.ripTable = new HashMap<>();
 		timer = new Timer(true);
 		this.ip_queue_map = new ConcurrentHashMap<Integer,Queue_ARP>();
 		if (!hasTable){
 			RIPv2 rip_packet = new RIPv2();
+
 			// create this table with the neighbours
-			for (Iface iface : this.interfaces.values()){}
-				rip_packet.addEntry(new RIPv2Entry(iface.getIpAddresss(), iface.getSubnetMask(), 0))
-				this.ripTable.insert(new ripEntry(iface.getIpAddresss(), 0, iface.getSubnetMask(), false))
+			for (Iface iface : this.interfaces.values()) {
+				RIPv2Entry entry = new RIPv2Entry();
+				entry.setAddress(iface.getIpAddress());
+				entry.setSubnetMask(iface.getSubnetMask());
+				entry.setMetric(0);
+				entry.setNextHopAddress(IPv4.toIPv4Address("0.0.0.0"));
+				ripTable.put(entry.getAddress(), entry);
 			}
+
 
 			// send our table to everybody
 			rip_packet.setCommand(RIPv2.COMMAND_REQUEST);
