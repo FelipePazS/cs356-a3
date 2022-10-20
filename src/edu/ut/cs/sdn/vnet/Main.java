@@ -67,7 +67,7 @@ public class Main
 		else if (host.startsWith("r"))
 		{
 			// Create router instance
-			dev = new Router(host, dump);
+			dev = new Router(host, dump, (routeTableFile != null));
 		}
 		else 
 		{

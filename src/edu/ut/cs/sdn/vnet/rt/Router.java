@@ -66,6 +66,46 @@ class Queue_ARP{
 	}
 }
 
+class unwantedRIP extends TimerTask{
+
+	Ethernet eth;
+	Iface iface;
+	Router router;
+	public void unwantedRIP(Ethernet request, Iface outIface, Router _router){
+		this.eth = request;
+		this.iface = outIface;
+		this.router = _router;
+	}
+	@Override
+    public void run() {
+		this.router.sendPacket(this.eth, this.iface);
+    }
+
+}
+
+class ripEntry{
+	int  ip;    /* address of destination */
+    int  nextHop;        /* address of next hop */
+    int  cost;          /* distance metric */
+	int subnet;
+    float   last_update;
+	bool is_neighbor;
+
+	public ripEntry(int des,int sb, int hop, int _cost, bool set_timer){
+		this.destination = des;
+		this.nextHop = hop;
+		this.cost = _cost;
+		this.subnet = sb;
+		if (set_timer){
+			is_neighbor = false;
+			last_update = System.currentTimeMillis();
+		}
+		else {
+			is_neighbor = true;
+		}
+	}
+}
+
 /**
  * @author Aaron Gember-Jacobson and Anubhavnidhi Abhashkumar
  */
@@ -73,6 +113,8 @@ public class Router extends Device
 {	
 	/** Routing table for the router */
 	private RouteTable routeTable;
+	private Map<int, ripEntry> ripTable;
+	Timer timer;
 	
 	/** ARP cache for the router */
 	private ConcurrentHashMap<Integer,Queue_ARP> ip_queue_map;
@@ -99,12 +141,45 @@ public class Router extends Device
 	 * Creates a router for a specific host.
 	 * @param host hostname for the router
 	 */
-	public Router(String host, DumpFile logfile)
+	public Router(String host, DumpFile logfile, bool hasTable)
 	{
 		super(host,logfile);
 		this.routeTable = new RouteTable();
 		this.arpCache = new ArpCache();
+		this.ripTable = new HashMap<int, ripEntry>();
+		timer = new Timer(true);
 		this.ip_queue_map = new ConcurrentHashMap<Integer,Queue_ARP>();
+		if (!hasTable){
+			RIPv2 rip_packet = new RIPv2();
+			// create this table with the neighbours
+			for (Iface iface : this.interfaces.values()){}
+				rip_packet.addEntry(new RIPv2Entry(iface.getIpAddresss(), iface.getSubnetMask(), 0))
+				this.ripTable.insert(new ripEntry(iface.getIpAddresss(), 0, iface.getSubnetMask(), false))
+			}
+
+			// send our table to everybody
+			rip_packet.setCommand(RIPv2.COMMAND_REQUEST);
+			UDP udp = new UDP();
+			udp.setSourcePort(UDP.RIP_PORT);
+			udp.setDestinationPort(UDP.RIP_PORT);
+			udp.setPayload(rip_packet);
+
+			IPv4 ipPacket = new IPv4();
+			ipPacket.setDestinationAddress(RIP_ADDR);
+			ipPacket.setProtocol(IPv4.PROTOCOL_UDP);
+			ipPacket.setPayload(udp);
+
+			Ethernet eth = new Ethernet();
+			eth.setDestinationMACAddress("FF:FF:FF:FF:FF:FF");
+			eth.setPayload(ipPacket);
+
+			for (Iface iface : this.interfaces.values()){
+				this.sendPacket(eth, iface);
+			}
+
+			MyTimerTask task = new unwantedRIP();
+			timer.schedule(task, 10*1000, 10*1000);
+		}
 	}
 	
 	/**
@@ -224,6 +299,19 @@ public class Router extends Device
 			break;
 		}
 	}
+
+	private void update_rip(RIPv2 rip, Iface iface){
+		List<RIPv2Entry> their_entries = rip.getEntries();
+		for (RIPv2Entry entry : their_entries){
+			if(ripTable.containsKey(entry.getAddress())){
+
+			}
+			else {
+				ripEntry n_entry = new ripEntry(entry.getAddress(), entry.getSubnetMask(),iface.getIpAddress(), true);
+				ripTable.put(entry.getAddress(), n_entry);
+			}
+		}
+	}
 	
 	private void handleIpPacket(Ethernet etherPacket, Iface inIface)
 	{
@@ -235,10 +323,24 @@ public class Router extends Device
 		IPv4 ipPacket = (IPv4)etherPacket.getPayload();
         System.out.println("Handle IP packet");
 
+
+		// Handle RIP
         if (ipPacket.getDestinationAddress() == RIP_ADDR && ipPacket.getProtocol() == IPv4.PROTOCOL_UDP) {
         	UDP udp = (UDP) ipPacket.getPayload();
         	if (udp.getDestinationPort() == UDP.RIP_PORT) {
+				RIPv2 rip = (RIPv2) udp.getPayload();
+				switch(rip.getCommand())
+				{
+				case RIPv2.COMMAND_REQUEST:
+					// update my table and send it to the requesting router
+					this.update_rip(rip);
+					break;
+				
+				case RIPv2.COMMAND_RESPONSE:
+					// update my table
 
+					break;
+				}
 			}
 
 		}
@@ -296,6 +398,7 @@ public class Router extends Device
         int dstAddr = ipPacket.getDestinationAddress();
 
         // Find matching route table entry 
+		// Here not use
         RouteEntry bestMatch = this.routeTable.lookup(dstAddr);
 
         // If no entry matched, do nothing
@@ -349,13 +452,13 @@ public class Router extends Device
 				eth_request.setPayload(arp_request);
 
 				// Create Queue struct
-				Timer timer = new Timer(true);
-				MyTimerTask task = new MyTimerTask(eth_request, outIface, this,ip_queue_map, timer);
-				Queue_ARP queue = new Queue_ARP(outIface, timer);
+				Timer _timer = new Timer(true);
+				MyTimerTask task = new MyTimerTask(eth_request, outIface, this,ip_queue_map, _timer);
+				Queue_ARP queue = new Queue_ARP(outIface, _timer);
 				queue.q.add(etherPacket);
 				ip_queue_map.put(nextHop, queue);
 
-				timer.schedule(task, 1000, 1000);
+				_timer.schedule(task, 1000, 1000);
 			}
 
 			this.sendPacket(eth_request, outIface);
@@ -376,6 +479,7 @@ public class Router extends Device
 
 		int sourceAddr = ogIpPacket.getSourceAddress();
 
+		// Here not use routetable
 		RouteEntry bestMatch = this.routeTable.lookup(sourceAddr);
 
 		// If no entry matched, do nothing
