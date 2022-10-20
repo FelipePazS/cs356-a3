@@ -21,26 +21,30 @@ class MyTimerTask extends TimerTask {
 	int ip;
 	ConcurrentHashMap map;
 
-	public MyTimerTask(Ethernet request, Iface outIface, Router _router, ConcurrentHashMap map, Timer _timer){
+	public MyTimerTask(Ethernet request, int ip, Iface outIface, Router _router, ConcurrentHashMap map, Timer _timer){
 		this.ARP_request = request;
 		this.outFace = outIface;
 		this.TTL = 2;
 		this.timer = _timer;
 		this.router = _router;
 		this.map = map;
+		this.ip = ip;
 	}
 
     @Override
     public void run() {
         if (this.TTL > 0){
 			this.TTL -= 1;
-			this.router.sendPacket(ARP_request, outFace);
 			if (this.TTL == 0 || this.TTL < 0){
 				timer.cancel();
 			}
 		}
 		else {
 			if(map.containsKey(ip)){
+				Queue_ARP queue = map.get(ip);
+				for (Ethernet packet : queue.q){
+					router.handleICMP(packet, outIface, ICMP_DEST_HOST_UNREACH_TYPE, ICMP_DEST_HOST_UNREACH_CODE);
+				}
 				map.remove(ip);
 			}
 			timer.cancel();
