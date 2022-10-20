@@ -73,6 +73,8 @@ public class Router extends Device
 {	
 	/** Routing table for the router */
 	private RouteTable routeTable;
+
+	private ConcurrentHashMap<Integer, RIPv2Entry> ripTable;
 	
 	/** ARP cache for the router */
 	private ConcurrentHashMap<Integer,Queue_ARP> ip_queue_map;
@@ -99,12 +101,28 @@ public class Router extends Device
 	 * Creates a router for a specific host.
 	 * @param host hostname for the router
 	 */
-	public Router(String host, DumpFile logfile)
+	public Router(String host, DumpFile logfile, boolean hasTable)
 	{
 		super(host,logfile);
 		this.routeTable = new RouteTable();
 		this.arpCache = new ArpCache();
 		this.ip_queue_map = new ConcurrentHashMap<Integer,Queue_ARP>();
+		this.ripTable = new ConcurrentHashMap<Integer, RIPv2Entry>();
+		if (!hasTable) {
+			// Fill up table
+			for (Iface iface : this.interfaces.values()) {
+				RIPv2Entry entry = new RIPv2Entry();
+				entry.setAddress(iface.getIpAddress());
+				entry.setSubnetMask(iface.getSubnetMask());
+				entry.setNextHopAddress(0);
+				entry.setMetric(0);
+				this.ripTable.put(entry.getAddress(), entry);
+				// Send out requests
+				this.handleRIP(null, iface, RIPv2.COMMAND_REQUEST, false);
+			}
+		}
+
+
 	}
 	
 	/**
@@ -166,6 +184,19 @@ public class Router extends Device
 		switch(etherPacket.getEtherType())
 		{
 		case Ethernet.TYPE_IPv4:
+			IPv4 ipPacket = (IPv4) etherPacket.getPayload();
+			if (ipPacket.getDestinationAddress() == RIP_ADDR && ipPacket.getProtocol() == IPv4.PROTOCOL_UDP) {
+				UDP udp = (UDP) ipPacket.getPayload();
+				if (udp.getDestinationPort() == UDP.RIP_PORT) {
+					RIPv2 rip = (RIPv2) udp.getPayload();
+					if (rip.getCommand() == RIPv2.COMMAND_REQUEST) {
+						handleRIP(etherPacket, inIface, RIPv2.COMMAND_REQUEST, true);
+					} else {
+
+
+					}
+				}
+			}
 			this.handleIpPacket(etherPacket, inIface);
 			break;
 		case Ethernet.TYPE_ARP:
@@ -234,14 +265,6 @@ public class Router extends Device
 		// Get IP header
 		IPv4 ipPacket = (IPv4)etherPacket.getPayload();
         System.out.println("Handle IP packet");
-
-        if (ipPacket.getDestinationAddress() == RIP_ADDR && ipPacket.getProtocol() == IPv4.PROTOCOL_UDP) {
-        	UDP udp = (UDP) ipPacket.getPayload();
-        	if (udp.getDestinationPort() == UDP.RIP_PORT) {
-
-			}
-
-		}
 
         // Verify checksum
         short origCksum = ipPacket.getChecksum();
@@ -437,28 +460,42 @@ public class Router extends Device
 		this.sendPacket(ether, ogIface);
 	}
 
-	private void handleRIP(Iface ogIface, int ripCommand) {
-
+	private void handleRIP(Ethernet ogEther, Iface ogIface, int ripCommand, boolean specificResponse) {
 		Ethernet ether = new Ethernet();
 		ether.setEtherType(Ethernet.TYPE_IPv4);
 		ether.setSourceMACAddress(ogIface.getMacAddress().toBytes());
-		ether.setDestinationMACAddress(BROADCAST_MAC_ADDR);
+		if (!specificResponse) {
+			ether.setDestinationMACAddress(BROADCAST_MAC_ADDR);
+		} else {
+			ether.setDestinationMACAddress(ogEther.getDestinationMACAddress());
+		}
 
 		IPv4 ip = new IPv4();
 		final byte ICMP_STANDARD_TTL = 64;
 		ip.setTtl(ICMP_STANDARD_TTL);
 		ip.setProtocol(IPv4.PROTOCOL_UDP);
 		ip.setSourceAddress(ogIface.getIpAddress());
+		if (!specificResponse) {
+			ip.setDestinationAddress(RIP_ADDR);
+		} else {
+			IPv4 ogIp = (IPv4) ogEther.getPayload();
+			ip.setDestinationAddress(ogIp.getSourceAddress());
+		}
 
 		UDP udp = new UDP();
 		udp.setSourcePort(UDP.RIP_PORT);
 		udp.setDestinationPort(UDP.RIP_PORT);
 
-		Data data = new Data();
-		
 		RIPv2 rip = new RIPv2();
 		rip.setCommand((byte) ripCommand);
 
+		Data data = new Data();
+		data.setData(rip.serialize());
+
+		ether.setPayload(ip);
+		ip.setPayload(udp);
+		udp.setPayload(data);
+		this.sendPacket(ether, ogIface);
 	}
 
 
