@@ -19,9 +19,9 @@ class MyTimerTask extends TimerTask {
 	Router router;
 	Timer timer;
 	int ip;
-	ConcurrentHashMap map;
+	ConcurrentHashMap<Integer, Queue_ARP> map;
 
-	public MyTimerTask(Ethernet request, int ip, Iface outIface, Router _router, ConcurrentHashMap map, Timer _timer){
+	public MyTimerTask(Ethernet request, int ip, Iface outIface, Router _router, ConcurrentHashMap<Integer, Queue_ARP> map, Timer _timer){
 		this.ARP_request = request;
 		this.outFace = outIface;
 		this.TTL = 2;
@@ -43,7 +43,7 @@ class MyTimerTask extends TimerTask {
 			if(map.containsKey(ip)){
 				Queue_ARP queue = map.get(ip);
 				for (Ethernet packet : queue.q){
-					router.handleICMP(packet, outIface, ICMP_DEST_HOST_UNREACH_TYPE, ICMP_DEST_HOST_UNREACH_CODE);
+					router.handleICMP(packet, this.outFace, 3, 1);
 				}
 				map.remove(ip);
 			}
@@ -376,7 +376,7 @@ public class Router extends Device
 
 				// Create Queue struct
 				Timer timer = new Timer(true);
-				MyTimerTask task = new MyTimerTask(eth_request, outIface, this,ip_queue_map, timer);
+				MyTimerTask task = new MyTimerTask(eth_request, nextHop, outIface, this,  this.ip_queue_map, timer);
 				Queue_ARP queue = new Queue_ARP(outIface, timer);
 				queue.q.add(etherPacket);
 				ip_queue_map.put(nextHop, queue);
@@ -392,7 +392,7 @@ public class Router extends Device
         this.sendPacket(etherPacket, outIface);
     }
 
-    private void handleICMP(Ethernet ogEtherPacket, Iface ogIface, int IcmpType, int IcmpCode) {
+    public void handleICMP(Ethernet ogEtherPacket, Iface ogIface, int IcmpType, int IcmpCode) {
 
 		IPv4 ogIpPacket = (IPv4) ogEtherPacket.getPayload();
 
@@ -473,6 +473,12 @@ public class Router extends Device
 		}
 		else {
 			// creating a request or response 
+			if (ogEther != null){
+				IPv4 ip = (IPv4) ogEther.getPayload();
+				UDP udp = (UDP) ip.getPayload();
+				RIPv2 rip = (RIPv2) udp.getPayload();
+				update_table(rip.getEntries(), ip.getSourceAddress(), ogIface);
+			}
 			Ethernet ether = new Ethernet();
 			ether.setEtherType(Ethernet.TYPE_IPv4);
 			ether.setSourceMACAddress(ogIface.getMacAddress().toBytes());
@@ -520,22 +526,19 @@ public class Router extends Device
 
 			int d2 = entry.getMetric();
 			int d3 = Integer.MAX_VALUE;
-			RIPv2Entry entry_to_be_modified;
-			if (this.ripTable.containsKey(entries.getAddress()){
-				entry_to_be_modified = this.ripTable.get(entries.getAddress());
+			RIPv2Entry entry_to_be_modified = new RIPv2Entry();
+			if (this.ripTable.containsKey(entry.getAddress())){
+				entry_to_be_modified = this.ripTable.get(entry.getAddress());
 				d3 = entry_to_be_modified.getMetric();
 			}
-			if (d1 + d2 < = d3){
+			if ((d1 + d2) <= d3){
 				entry_to_be_modified.setMetric(d1 + d2);
 				entry_to_be_modified.setNextHopAddress(ip);
 			}
 
 			// update route table
-			if (RouteTable.fing(ip, iface.getMaskAddress) != null){
-				RouteTable.update(entries.getAddress(), ip, iface.getMaskAddress , iface);
-			}
-			else {
-				RouteTable.insert(entries.getAddress(), ip, iface.getMaskAddress , iface);
+			if (!routeTable.update(entry.getAddress(), ip, iface.getSubnetMask() , iface)){
+				routeTable.insert(entry.getAddress(), ip, iface.getSubnetMask() , iface);
 			}
 		}
 	}
