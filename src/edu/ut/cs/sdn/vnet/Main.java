@@ -91,8 +91,7 @@ public class Main
 		if (dev instanceof Router) 
 		{
 			// Read static route table
-			if (routeTableFile != null)
-			{ ((Router)dev).loadRouteTable(routeTableFile); }
+			((Router)dev).loadRouteTable(routeTableFile);
 			
 			// Read static ACP cache
 			if (arpCacheFile != null)

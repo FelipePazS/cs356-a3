@@ -98,7 +98,7 @@ public class Router extends Device
 	private static final String BROADCAST_MAC_ADDR = "FF:FF:FF:FF:FF:FF";
 
 
-
+	private boolean hasTable;
 
 	
 	/**
@@ -112,21 +112,7 @@ public class Router extends Device
 		this.arpCache = new ArpCache();
 		this.ip_queue_map = new ConcurrentHashMap<Integer,Queue_ARP>();
 		this.ripTable = new ConcurrentHashMap<Integer, RIPv2Entry>();
-		if (!hasTable) {
-			// Fill up table
-			for (Iface iface : this.interfaces.values()) {
-				RIPv2Entry entry = new RIPv2Entry();
-				entry.setAddress(iface.getIpAddress());
-				entry.setSubnetMask(iface.getSubnetMask());
-				entry.setNextHopAddress(0);
-				entry.setMetric(0);
-				this.ripTable.put(entry.getAddress(), entry);
-				// Send out requests
-				this.handleRIP(null, iface, RIPv2.COMMAND_REQUEST, false);
-			}
-		}
-
-
+		this.hasTable = hasTable;
 	}
 	
 	/**
@@ -141,17 +127,37 @@ public class Router extends Device
 	 */
 	public void loadRouteTable(String routeTableFile)
 	{
-		if (!routeTable.load(routeTableFile, this))
-		{
-			System.err.println("Error setting up routing table from file "
-					+ routeTableFile);
-			System.exit(1);
+		if (hasTable){
+			if (!routeTable.load(routeTableFile, this))
+			{
+				System.err.println("Error setting up routing table from file "
+						+ routeTableFile);
+				System.exit(1);
+			}
+			
+			System.out.println("Loaded static route table");
+			System.out.println("-------------------------------------------------");
+			System.out.print(this.routeTable.toString());
+			System.out.println("-------------------------------------------------");
 		}
-		
-		System.out.println("Loaded static route table");
-		System.out.println("-------------------------------------------------");
-		System.out.print(this.routeTable.toString());
-		System.out.println("-------------------------------------------------");
+		else {
+			// Fill up table
+			System.out.println("NO TABLE");
+			for (Iface iface : this.interfaces.values()) {
+				System.out.println("INTERFACE");
+				RIPv2Entry entry = new RIPv2Entry();
+				entry.setAddress(iface.getIpAddress());
+				entry.setSubnetMask(iface.getSubnetMask());
+				entry.setNextHopAddress(0);
+				entry.setMetric(0);
+				this.ripTable.put(entry.getAddress(), entry);
+				this.routeTable.insert(entry.getAddress(), 0, iface.getSubnetMask() , iface);
+			}
+			System.out.println("ABOUT TO SEND RIPS");
+			for (Iface iface : this.interfaces.values()) {
+				this.handleRIP(null, iface, RIPv2.COMMAND_REQUEST, false);
+			}
+		}
 	}
 	
 	/**
@@ -466,6 +472,7 @@ public class Router extends Device
 	private void handleRIP(Ethernet ogEther, Iface ogIface, byte ripCommand, boolean specific) {
 		if (ripCommand == (byte) 0){
 			// I got a response or unsolicited response, update my table
+			System.out.println("GOT A RESPONSE");
 			IPv4 ip = (IPv4) ogEther.getPayload();
 			UDP udp = (UDP) ip.getPayload();
 			RIPv2 rip = (RIPv2) udp.getPayload();
@@ -473,6 +480,7 @@ public class Router extends Device
 		}
 		else {
 			// creating a request or response 
+			System.out.println("CREATING REQUEST OR RESPONSE");
 			if (ogEther != null){
 				IPv4 ip = (IPv4) ogEther.getPayload();
 				UDP udp = (UDP) ip.getPayload();
@@ -506,6 +514,7 @@ public class Router extends Device
 	
 			RIPv2 rip = new RIPv2();
 			rip.setCommand((byte) ripCommand);
+			rip.setEntries(new LinkedList<RIPv2Entry>(ripTable.values()));
 	
 			Data data = new Data();
 			data.setData(rip.serialize());
