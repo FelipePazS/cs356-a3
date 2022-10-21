@@ -194,10 +194,9 @@ public class Router extends Device
 				if (udp.getDestinationPort() == UDP.RIP_PORT) {
 					RIPv2 rip = (RIPv2) udp.getPayload();
 					if (rip.getCommand() == RIPv2.COMMAND_REQUEST) {
-						handleRIP(etherPacket, inIface, RIPv2.COMMAND_REQUEST, true);
+						handleRIP(etherPacket, inIface, RIPv2.COMMAND_RESPONSE, true);
 					} else {
-
-
+						handleRIP(etherPacket, inIface, (byte) 0, true);
 					}
 				}
 			}
@@ -464,43 +463,81 @@ public class Router extends Device
 		this.sendPacket(ether, ogIface);
 	}
 
-	private void handleRIP(Ethernet ogEther, Iface ogIface, int ripCommand, boolean specificResponse) {
-		Ethernet ether = new Ethernet();
-		ether.setEtherType(Ethernet.TYPE_IPv4);
-		ether.setSourceMACAddress(ogIface.getMacAddress().toBytes());
-		if (!specificResponse) {
-			ether.setDestinationMACAddress(BROADCAST_MAC_ADDR);
-		} else {
-			ether.setDestinationMACAddress(ogEther.getDestinationMACAddress());
+	private void handleRIP(Ethernet ogEther, Iface ogIface, byte ripCommand, boolean specific) {
+		if (ripCommand == (byte) 0){
+			// I got a response or unsolicited response, update my table
+			IPv4 ip = (IPv4) ogEther.getPayload();
+			UDP udp = (UDP) ip.getPayload();
+			RIPv2 rip = (RIPv2) udp.getPayload();
+			update_table(rip.getEntries(), ip.getSourceAddress(), ogIface);
 		}
-
-		IPv4 ip = new IPv4();
-		final byte ICMP_STANDARD_TTL = 64;
-		ip.setTtl(ICMP_STANDARD_TTL);
-		ip.setProtocol(IPv4.PROTOCOL_UDP);
-		ip.setSourceAddress(ogIface.getIpAddress());
-		if (!specificResponse) {
-			ip.setDestinationAddress(RIP_ADDR);
-		} else {
-			IPv4 ogIp = (IPv4) ogEther.getPayload();
-			ip.setDestinationAddress(ogIp.getSourceAddress());
+		else {
+			// creating a request or response 
+			Ethernet ether = new Ethernet();
+			ether.setEtherType(Ethernet.TYPE_IPv4);
+			ether.setSourceMACAddress(ogIface.getMacAddress().toBytes());
+			if (!specific) {
+				ether.setDestinationMACAddress(BROADCAST_MAC_ADDR);
+			} else {
+				ether.setDestinationMACAddress(ogEther.getDestinationMACAddress());
+			}
+	
+			IPv4 ip = new IPv4();
+			final byte ICMP_STANDARD_TTL = 64;
+			ip.setTtl(ICMP_STANDARD_TTL);
+			ip.setProtocol(IPv4.PROTOCOL_UDP);
+			ip.setSourceAddress(ogIface.getIpAddress());
+			if (!specific) {
+				ip.setDestinationAddress(RIP_ADDR);
+			} else {
+				IPv4 ogIp = (IPv4) ogEther.getPayload();
+				ip.setDestinationAddress(ogIp.getSourceAddress());
+			}
+	
+			UDP udp = new UDP();
+			udp.setSourcePort(UDP.RIP_PORT);
+			udp.setDestinationPort(UDP.RIP_PORT);
+	
+			RIPv2 rip = new RIPv2();
+			rip.setCommand((byte) ripCommand);
+	
+			Data data = new Data();
+			data.setData(rip.serialize());
+	
+	
+			udp.setPayload(data);
+			ip.setPayload(udp);
+			ether.setPayload(ip);
+			this.sendPacket(ether, ogIface);
 		}
-
-		UDP udp = new UDP();
-		udp.setSourcePort(UDP.RIP_PORT);
-		udp.setDestinationPort(UDP.RIP_PORT);
-
-		RIPv2 rip = new RIPv2();
-		rip.setCommand((byte) ripCommand);
-
-		Data data = new Data();
-		data.setData(rip.serialize());
-
-		ether.setPayload(ip);
-		ip.setPayload(udp);
-		udp.setPayload(data);
-		this.sendPacket(ether, ogIface);
+		
 	}
 
+
+	void update_table(List<RIPv2Entry> entries, int ip, Iface iface){
+		for (RIPv2Entry entry : entries){
+			int d1 = 1;
+
+			int d2 = entry.getMetric();
+			int d3 = Integer.MAX_VALUE;
+			RIPv2Entry entry_to_be_modified;
+			if (this.ripTable.containsKey(entries.getAddress()){
+				entry_to_be_modified = this.ripTable.get(entries.getAddress());
+				d3 = entry_to_be_modified.getMetric();
+			}
+			if (d1 + d2 < = d3){
+				entry_to_be_modified.setMetric(d1 + d2);
+				entry_to_be_modified.setNextHopAddress(ip);
+			}
+
+			// update route table
+			if (RouteTable.fing(ip, iface.getMaskAddress) != null){
+				RouteTable.update(entries.getAddress(), ip, iface.getMaskAddress , iface);
+			}
+			else {
+				RouteTable.insert(entries.getAddress(), ip, iface.getMaskAddress , iface);
+			}
+		}
+	}
 
 }
