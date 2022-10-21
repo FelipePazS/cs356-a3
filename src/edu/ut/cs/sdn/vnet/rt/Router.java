@@ -53,6 +53,52 @@ class MyTimerTask extends TimerTask {
 
 }
 
+class MyTimerTask2 extends TimerTask {
+
+	ConcurrentHashMap<Integer, RIPv2Entry> ripTable;
+	Iface ogIface;
+	Router router;
+
+	public MyTimerTask2(Router router, ConcurrentHashMap<Integer, RIPv2Entry> ripTable, Iface ogIface){
+		this.ogIface = ogIface;
+		this.ripTable = ripTable;
+		this.router = router;
+	}
+
+    @Override
+    public void run() {
+		Ethernet ether = new Ethernet();
+		ether.setEtherType(Ethernet.TYPE_IPv4);
+		ether.setSourceMACAddress(ogIface.getMacAddress().toBytes());
+		ether.setDestinationMACAddress("FF:FF:FF:FF:FF:FF");
+
+		IPv4 ip = new IPv4();
+		final byte ICMP_STANDARD_TTL = 64;
+		ip.setTtl(ICMP_STANDARD_TTL);
+		ip.setProtocol(IPv4.PROTOCOL_UDP);
+		ip.setSourceAddress(ogIface.getIpAddress());
+		ip.setDestinationAddress(IPv4.toIPv4Address("224.0.0.9"));
+
+		UDP udp = new UDP();
+		udp.setSourcePort(UDP.RIP_PORT);
+		udp.setDestinationPort(UDP.RIP_PORT);
+
+		RIPv2 rip = new RIPv2();
+		rip.setCommand(RIPv2.COMMAND_RESPONSE);
+		rip.setEntries(new LinkedList<RIPv2Entry>(ripTable.values()));
+
+		Data data = new Data();
+		data.setData(rip.serialize());
+
+
+		udp.setPayload(data);
+		ip.setPayload(udp);
+		ether.setPayload(ip);
+		router.sendPacket(ether, ogIface);
+    }
+
+}
+
 class Queue_ARP{
 	public Queue<Ethernet> q;
 	long time_sent;
@@ -142,9 +188,7 @@ public class Router extends Device
 		}
 		else {
 			// Fill up table
-			System.out.println("NO TABLE");
 			for (Iface iface : this.interfaces.values()) {
-				System.out.println("INTERFACE");
 				RIPv2Entry entry = new RIPv2Entry();
 				entry.setAddress(iface.getIpAddress());
 				entry.setSubnetMask(iface.getSubnetMask());
@@ -153,9 +197,11 @@ public class Router extends Device
 				this.ripTable.put(entry.getAddress(), entry);
 				this.routeTable.insert(entry.getAddress(), 0, iface.getSubnetMask() , iface);
 			}
-			System.out.println("ABOUT TO SEND RIPS");
 			for (Iface iface : this.interfaces.values()) {
 				this.handleRIP(null, iface, RIPv2.COMMAND_REQUEST, false);
+				Timer timer = new Timer(true);
+				MyTimerTask2 task = new MyTimerTask2(this, ripTable, iface);
+				timer.schedule(task, 10*1000, 10*1000);
 			}
 		}
 	}
@@ -195,7 +241,7 @@ public class Router extends Device
 		{
 		case Ethernet.TYPE_IPv4:
 			IPv4 ipPacket = (IPv4) etherPacket.getPayload();
-			if (ipPacket.getDestinationAddress() == RIP_ADDR && ipPacket.getProtocol() == IPv4.PROTOCOL_UDP) {
+			if (ipPacket.getProtocol() == IPv4.PROTOCOL_UDP) {
 				UDP udp = (UDP) ipPacket.getPayload();
 				if (udp.getDestinationPort() == UDP.RIP_PORT) {
 					RIPv2 rip = (RIPv2) udp.getPayload();
@@ -206,7 +252,9 @@ public class Router extends Device
 					}
 				}
 			}
-			this.handleIpPacket(etherPacket, inIface);
+			else {
+				this.handleIpPacket(etherPacket, inIface);
+			}
 			break;
 		case Ethernet.TYPE_ARP:
 			this.handleARPPacket(etherPacket, inIface);
@@ -472,7 +520,6 @@ public class Router extends Device
 	private void handleRIP(Ethernet ogEther, Iface ogIface, byte ripCommand, boolean specific) {
 		if (ripCommand == (byte) 0){
 			// I got a response or unsolicited response, update my table
-			System.out.println("GOT A RESPONSE");
 			IPv4 ip = (IPv4) ogEther.getPayload();
 			UDP udp = (UDP) ip.getPayload();
 			RIPv2 rip = (RIPv2) udp.getPayload();
@@ -480,7 +527,6 @@ public class Router extends Device
 		}
 		else {
 			// creating a request or response 
-			System.out.println("CREATING REQUEST OR RESPONSE");
 			if (ogEther != null){
 				IPv4 ip = (IPv4) ogEther.getPayload();
 				UDP udp = (UDP) ip.getPayload();
